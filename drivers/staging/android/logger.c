@@ -40,7 +40,7 @@
 
 struct log_ctl{
 	char on_off_flag; /*on off flag read from modem side*/
-	char reserve;
+	char reserve[3];
 };
 #endif
 /*
@@ -446,10 +446,7 @@ static int logger_release(struct inode *ignored, struct file *file)
 {
 	if (file->f_mode & FMODE_READ) {
 		struct logger_reader *reader = file->private_data;
-		struct logger_log *log = reader->log;
-		mutex_lock(&log->mutex);
 		list_del(&reader->list);
-		mutex_unlock(&log->mutex);
 		kfree(reader);
 	}
 
@@ -572,10 +569,18 @@ static struct logger_log VAR = { \
 	.size = SIZE, \
 };
 
+/* save 0.5M memory */
+#ifndef CONFIG_HUAWEI_KERNEL
+DEFINE_LOGGER_DEVICE(log_main, LOGGER_LOG_MAIN, 256*1024)
+DEFINE_LOGGER_DEVICE(log_events, LOGGER_LOG_EVENTS, 256*1024)
+DEFINE_LOGGER_DEVICE(log_radio, LOGGER_LOG_RADIO, 256*1024)
+DEFINE_LOGGER_DEVICE(log_system, LOGGER_LOG_SYSTEM, 256*1024)
+#else
 DEFINE_LOGGER_DEVICE(log_main, LOGGER_LOG_MAIN, 64*1024)
 DEFINE_LOGGER_DEVICE(log_events, LOGGER_LOG_EVENTS, 256*1024)
 DEFINE_LOGGER_DEVICE(log_radio, LOGGER_LOG_RADIO, 64*1024)
 DEFINE_LOGGER_DEVICE(log_system, LOGGER_LOG_SYSTEM, 64*1024)
+#endif
 
 static struct logger_log *get_log_from_minor(int minor)
 {
@@ -610,14 +615,13 @@ static int __init init_log(struct logger_log *log)
 static int __init logger_init(void)
 {
 	int ret;
+    /* user log on/off must be controlled by NV */
+    /* usb rpc to replace pcom mechanism for fix reset issue */
+#if 0// CONFIG_HUAWEI_KERNEL
+    u16 nv_item = LOG_CTL_INFO_ITEM;
+    struct log_ctl ctl_info;
+    int  rval = -1;
 
-	/*add user log on/off switch*/
-  //  #ifdef CONFIG_HUAWEI_KERNEL
-  #if 0
-	u16 nv_item = LOG_CTL_INFO_ITEM;
-	struct log_ctl ctl_info;
-	int  rval = -1;
-	
     ctl_info.on_off_flag = -1;
 	rval = oem_rapi_read_nv(nv_item, (void*)&ctl_info, sizeof(ctl_info));
 	printk("logger open flag: on_off_flag=%d\n", ctl_info.on_off_flag);
