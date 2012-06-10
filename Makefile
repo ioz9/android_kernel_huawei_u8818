@@ -550,6 +550,7 @@ KBUILD_CFLAGS	+= -O2
 endif
 
 # Add Huawei Marco for different BT chip
+# enable  BoardConfig.mk
 ifeq ($(ENABLE_BCM_4330),true)
 KBUILD_CFLAGS += -DHUAWEI_BT_BCM4330
 endif

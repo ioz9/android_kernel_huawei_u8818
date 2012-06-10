@@ -35,7 +35,7 @@
 #define _MSM_KGSL_H
 
 #define KGSL_VERSION_MAJOR        3
-#define KGSL_VERSION_MINOR        5
+#define KGSL_VERSION_MINOR        7
 
 /*context flags */
 #define KGSL_CONTEXT_SAVE_GMEM	1
@@ -182,6 +182,8 @@ struct kgsl_device_platform_data {
 	struct kgsl_clk_data clk;
 	/* imem_clk_name is for 3d only, not used in 2d devices */
 	struct kgsl_grp_clk_name imem_clk_name;
+	const char *iommu_user_ctx_name;
+	const char *iommu_priv_ctx_name;
 };
 
 #endif
@@ -353,6 +355,18 @@ struct kgsl_sharedmem_free {
 #define IOCTL_KGSL_SHAREDMEM_FREE \
 	_IOW(KGSL_IOC_TYPE, 0x21, struct kgsl_sharedmem_free)
 
+struct kgsl_cff_user_event {
+	unsigned char cff_opcode;
+	unsigned int op1;
+	unsigned int op2;
+	unsigned int op3;
+	unsigned int op4;
+	unsigned int op5;
+	unsigned int __pad[2];
+};
+
+#define IOCTL_KGSL_CFF_USER_EVENT \
+	_IOW(KGSL_IOC_TYPE, 0x31, struct kgsl_cff_user_event)
 
 struct kgsl_gmem_desc {
 	unsigned int x;
@@ -431,6 +445,15 @@ struct kgsl_gpumem_alloc {
 
 #define IOCTL_KGSL_GPUMEM_ALLOC \
 	_IOWR(KGSL_IOC_TYPE, 0x2f, struct kgsl_gpumem_alloc)
+
+struct kgsl_cff_syncmem {
+	unsigned int gpuaddr;
+	unsigned int len;
+	unsigned int __pad[2]; /* For future binary compatibility */
+};
+
+#define IOCTL_KGSL_CFF_SYNCMEM \
+	_IOW(KGSL_IOC_TYPE, 0x30, struct kgsl_cff_syncmem)
 
 #ifdef __KERNEL__
 #ifdef CONFIG_MSM_KGSL_DRM

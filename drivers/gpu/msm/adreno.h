@@ -71,13 +71,16 @@ struct adreno_device {
 	struct kgsl_memregion gmemspace;
 	struct adreno_context *drawctxt_active;
 	wait_queue_head_t ib1_wq;
+	const char *pfp_fwfile;
 	unsigned int *pfp_fw;
 	size_t pfp_fw_size;
+	const char *pm4_fwfile;
 	unsigned int *pm4_fw;
 	size_t pm4_fw_size;
 	struct adreno_ringbuffer ringbuffer;
 	unsigned int mharb;
 	struct adreno_gpudev *gpudev;
+	unsigned int wait_timeout;
 };
 
 struct adreno_gpudev {
@@ -133,5 +136,11 @@ static inline int adreno_is_a22x(struct adreno_device *adreno_dev)
 	return (adreno_dev->gpurev  == ADRENO_REV_A220 ||
 		adreno_dev->gpurev == ADRENO_REV_A225);
 }
+
+static inline int adreno_is_a2xx(struct adreno_device *adreno_dev)
+{
+	return (adreno_dev->gpurev <= ADRENO_REV_A225);
+}
+
 
 #endif /*__ADRENO_H */

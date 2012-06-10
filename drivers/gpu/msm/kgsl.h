@@ -40,14 +40,6 @@
 
 #define KGSL_NAME "kgsl"
 
-/* Flags to control whether to flush or invalidate a cached memory range */
-#define KGSL_CACHE_INV		0x00000000
-#define KGSL_CACHE_CLEAN	0x00000001
-#define KGSL_CACHE_FLUSH	0x00000002
-
-#define KGSL_CACHE_USER_ADDR	0x00000010
-#define KGSL_CACHE_VMALLOC_ADDR	0x00000020
-
 /*cache coherency ops */
 #define DRM_KGSL_GEM_CACHE_OP_TO_DEV	0x0001
 #define DRM_KGSL_GEM_CACHE_OP_FROM_DEV	0x0002
@@ -64,13 +56,9 @@
 #define KGSL_PAGETABLE_ENTRIES(_sz) (((_sz) >> PAGE_SHIFT) + \
 				     KGSL_PT_EXTRA_ENTRIES)
 
-#ifdef CONFIG_MSM_KGSL_MMU
 #define KGSL_PAGETABLE_SIZE \
 ALIGN(KGSL_PAGETABLE_ENTRIES(CONFIG_MSM_KGSL_PAGE_TABLE_SIZE) * \
 KGSL_PAGETABLE_ENTRY_SIZE, PAGE_SIZE)
-#else
-#define KGSL_PAGETABLE_SIZE 0
-#endif
 
 #ifdef CONFIG_KGSL_PER_PROCESS_PAGE_TABLE
 #define KGSL_PAGETABLE_COUNT (CONFIG_MSM_KGSL_PAGE_TABLE_COUNT)
@@ -91,15 +79,6 @@ KGSL_PAGETABLE_ENTRY_SIZE, PAGE_SIZE)
 
 struct kgsl_device;
 
-struct kgsl_ptpool {
-	size_t ptsize;
-	struct mutex lock;
-	struct list_head list;
-	int entries;
-	int static_entries;
-	int chunks;
-};
-
 struct kgsl_driver {
 	struct cdev cdev;
 	dev_t major;
@@ -110,8 +89,6 @@ struct kgsl_driver {
 	struct kobject *ptkobj;
 	struct kobject *prockobj;
 	struct kgsl_device *devp[KGSL_DEVICE_MAX];
-
-	uint32_t flags_debug;
 
 	/* Global lilst of open processes */
 	struct list_head process_list;
@@ -125,7 +102,7 @@ struct kgsl_driver {
 	/* Mutex for protecting the device list */
 	struct mutex devlock;
 
-	struct kgsl_ptpool ptpool;
+	void *ptpool;
 
 	struct {
 		unsigned int vmalloc;

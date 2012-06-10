@@ -134,13 +134,18 @@ static struct z180_device device_2d0 = {
 		.id = KGSL_DEVICE_2D0,
 		.ver_major = DRIVER_VERSION_MAJOR,
 		.ver_minor = DRIVER_VERSION_MINOR,
-		.mmu = {
-			.config = Z180_MMU_CONFIG,
+		.mh = {
+			.mharb = Z180_CFG_MHARB,
+			.mh_intf_cfg1 = 0x00032f07,
+			.mh_intf_cfg2 = 0x004b274f,
 			/* turn off memory protection unit by setting
 			   acceptable physical address range to include
 			   all pages. */
 			.mpu_base = 0x00000000,
 			.mpu_range =  0xFFFFF000,
+		},
+		.mmu = {
+			.config = Z180_MMU_CONFIG,
 		},
 		.pwrctrl = {
 			.regulator_name = "fs_gfx2d0",
@@ -151,13 +156,13 @@ static struct z180_device device_2d0 = {
 		.active_cnt = 0,
 		.iomemname = KGSL_2D0_REG_MEMORY,
 		.ftbl = &z180_functable,
-		.display_off = {
 #ifdef CONFIG_HAS_EARLYSUSPEND
+		.display_off = {
 			.level = EARLY_SUSPEND_LEVEL_STOP_DRAWING,
 			.suspend = kgsl_early_suspend_driver,
 			.resume = kgsl_late_resume_driver,
-#endif
 		},
+#endif
 	},
 };
 
@@ -167,13 +172,18 @@ static struct z180_device device_2d1 = {
 		.id = KGSL_DEVICE_2D1,
 		.ver_major = DRIVER_VERSION_MAJOR,
 		.ver_minor = DRIVER_VERSION_MINOR,
-		.mmu = {
-			.config = Z180_MMU_CONFIG,
+		.mh = {
+			.mharb = Z180_CFG_MHARB,
+			.mh_intf_cfg1 = 0x00032f07,
+			.mh_intf_cfg2 = 0x004b274f,
 			/* turn off memory protection unit by setting
 			   acceptable physical address range to include
 			   all pages. */
 			.mpu_base = 0x00000000,
 			.mpu_range =  0xFFFFF000,
+		},
+		.mmu = {
+			.config = Z180_MMU_CONFIG,
 		},
 		.pwrctrl = {
 			.regulator_name = "fs_gfx2d1",
@@ -243,18 +253,16 @@ static irqreturn_t z180_isr(int irq, void *data)
 	return result;
 }
 
-static int z180_cleanup_pt(struct kgsl_device *device,
+static void z180_cleanup_pt(struct kgsl_device *device,
 			       struct kgsl_pagetable *pagetable)
 {
 	struct z180_device *z180_dev = Z180_DEVICE(device);
 
-	kgsl_mmu_unmap(pagetable, &device->mmu.dummyspace);
+	kgsl_mmu_unmap(pagetable, &device->mmu.setstate_memory);
 
 	kgsl_mmu_unmap(pagetable, &device->memstore);
 
 	kgsl_mmu_unmap(pagetable, &z180_dev->ringbuffer.cmdbufdesc);
-
-	return 0;
 }
 
 static int z180_setup_pt(struct kgsl_device *device,
@@ -263,7 +271,7 @@ static int z180_setup_pt(struct kgsl_device *device,
 	int result = 0;
 	struct z180_device *z180_dev = Z180_DEVICE(device);
 
-	result = kgsl_mmu_map_global(pagetable, &device->mmu.dummyspace,
+	result = kgsl_mmu_map_global(pagetable, &device->mmu.setstate_memory,
 				     GSL_PT_PAGE_RV | GSL_PT_PAGE_WV);
 
 	if (result)
@@ -282,7 +290,7 @@ static int z180_setup_pt(struct kgsl_device *device,
 	return result;
 
 error_unmap_dummy:
-	kgsl_mmu_unmap(pagetable, &device->mmu.dummyspace);
+	kgsl_mmu_unmap(pagetable, &device->mmu.setstate_memory);
 
 error_unmap_memstore:
 	kgsl_mmu_unmap(pagetable, &device->memstore);
@@ -379,11 +387,6 @@ static int z180_idle(struct kgsl_device *device, unsigned int timeout)
 	return status;
 }
 
-static void z180_setstate(struct kgsl_device *device, uint32_t flags)
-{
-	kgsl_default_setstate(device, flags);
-}
-
 int
 z180_cmdstream_issueibcmds(struct kgsl_device_private *dev_priv,
 			struct kgsl_context *context,
@@ -392,7 +395,7 @@ z180_cmdstream_issueibcmds(struct kgsl_device_private *dev_priv,
 			uint32_t *timestamp,
 			unsigned int ctrl)
 {
-	unsigned int result = 0;
+	long result = 0;
 	unsigned int ofs        = PACKETSIZE_STATESTREAM * sizeof(unsigned int);
 	unsigned int cnt        = 5;
 	unsigned int nextaddr   = 0;
@@ -431,7 +434,7 @@ z180_cmdstream_issueibcmds(struct kgsl_device_private *dev_priv,
 		cnt = PACKETSIZE_STATESTREAM;
 		ofs = 0;
 	}
-	z180_setstate(device, kgsl_pt_get_flags(device->mmu.hwpagetable,
+	kgsl_setstate(device, kgsl_mmu_pt_get_flags(device->mmu.hwpagetable,
 						    device->id));
 
 	result = wait_event_interruptible_timeout(device->wait_queue,
@@ -439,7 +442,7 @@ z180_cmdstream_issueibcmds(struct kgsl_device_private *dev_priv,
 				  msecs_to_jiffies(KGSL_TIMEOUT_DEFAULT));
 	if (result < 0) {
 		KGSL_CMD_ERR(device, "wait_event_interruptible_timeout "
-			"failed: %d\n", result);
+			"failed: %ld\n", result);
 		goto error;
 	}
 	result = 0;
@@ -475,7 +478,7 @@ z180_cmdstream_issueibcmds(struct kgsl_device_private *dev_priv,
 	z180_cmdwindow_write(device, ADDR_VGV3_CONTROL, cmd);
 	z180_cmdwindow_write(device, ADDR_VGV3_CONTROL, 0);
 error:
-	return result;
+	return (int)result;
 }
 
 static int z180_ringbuffer_init(struct kgsl_device *device)
@@ -549,15 +552,10 @@ static int z180_start(struct kgsl_device *device, unsigned int init_ram)
 
 	kgsl_pwrctrl_enable(device);
 
-	/* Set up MH arbiter.  MH offsets are considered to be dword
-	 * based, therefore no down shift. */
-	z180_regwrite(device, ADDR_MH_ARBITER_CONFIG, Z180_CFG_MHARB);
-
-	z180_regwrite(device, ADDR_MH_CLNT_INTF_CTRL_CONFIG1, 0x00030F27);
-	z180_regwrite(device, ADDR_MH_CLNT_INTF_CTRL_CONFIG2, 0x004B274F);
-
 	/* Set interrupts to 0 to ensure a good state */
 	z180_regwrite(device, (ADDR_VGC_IRQENABLE >> 2), 0x0);
+
+	kgsl_mh_start(device);
 
 	status = kgsl_mmu_start(device);
 	if (status)
@@ -623,16 +621,12 @@ static int z180_getproperty(struct kgsl_device *device,
 	break;
 	case KGSL_PROP_MMU_ENABLE:
 		{
-#ifdef CONFIG_MSM_KGSL_MMU
-			int mmuProp = 1;
-#else
-			int mmuProp = 0;
-#endif
+			int mmu_prop = kgsl_mmu_enabled();
 			if (sizebytes != sizeof(int)) {
 				status = -EINVAL;
 				break;
 			}
-			if (copy_to_user(value, &mmuProp, sizeof(mmuProp))) {
+			if (copy_to_user(value, &mmu_prop, sizeof(mmu_prop))) {
 				status = -EFAULT;
 				break;
 			}
@@ -758,8 +752,8 @@ static void z180_regread(struct kgsl_device *device,
 	if (!in_interrupt())
 		kgsl_pre_hwaccess(device);
 
-	if ((offsetwords >= ADDR_MH_ARBITER_CONFIG &&
-	     offsetwords <= ADDR_MH_AXI_HALT_CONTROL) ||
+	if ((offsetwords >= MH_ARBITER_CONFIG &&
+	     offsetwords <= MH_AXI_HALT_CONTROL) ||
 	    (offsetwords >= MH_MMU_CONFIG &&
 	     offsetwords <= MH_MMU_MPU_END)) {
 		_z180_regread_mmu(device, offsetwords, value);
@@ -775,8 +769,8 @@ static void z180_regwrite(struct kgsl_device *device,
 	if (!in_interrupt())
 		kgsl_pre_hwaccess(device);
 
-	if ((offsetwords >= ADDR_MH_ARBITER_CONFIG &&
-	     offsetwords <= ADDR_MH_CLNT_INTF_CTRL_CONFIG2) ||
+	if ((offsetwords >= MH_ARBITER_CONFIG &&
+	     offsetwords <= MH_CLNT_INTF_CTRL_CONFIG2) ||
 	    (offsetwords >= MH_MMU_CONFIG &&
 	     offsetwords <= MH_MMU_MPU_END)) {
 		_z180_regwrite_mmu(device, offsetwords, value);
@@ -812,6 +806,11 @@ static int z180_waittimestamp(struct kgsl_device *device,
 				unsigned int msecs)
 {
 	int status = -EINVAL;
+
+	/* Don't wait forever, set a max (10 sec) value for now */
+	if (msecs == -1)
+		msecs = 10 * MSEC_PER_SEC;
+
 	mutex_unlock(&device->mutex);
 	status = z180_wait(device, timestamp, msecs);
 	mutex_lock(&device->mutex);
@@ -907,7 +906,6 @@ static const struct kgsl_functable z180_functable = {
 	.power_stats = z180_power_stats,
 	.irqctrl = z180_irqctrl,
 	/* Optional functions */
-	.setstate = z180_setstate,
 	.drawctxt_create = NULL,
 	.drawctxt_destroy = z180_drawctxt_destroy,
 	.ioctl = NULL,

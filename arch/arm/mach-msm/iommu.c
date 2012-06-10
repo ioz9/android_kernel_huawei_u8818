@@ -22,6 +22,7 @@
 #include <linux/slab.h>
 #include <linux/iommu.h>
 #include <linux/clk.h>
+#include <linux/scatterlist.h>
 
 #include <asm/cacheflush.h>
 #include <asm/sizes.h>
@@ -36,6 +37,15 @@ __asm__ __volatile__ (							\
 
 #define RCP15_PRRR(reg)		MRC(reg, p15, 0, c10, c2, 0)
 #define RCP15_NMRR(reg)		MRC(reg, p15, 0, c10, c2, 1)
+
+#ifndef CONFIG_IOMMU_PGTABLES_L2
+static inline void clean_pte(unsigned long *start, unsigned long *end)
+{
+	dmac_flush_range(start, end);
+}
+#else
+static inline void clean_pte(unsigned long *start, unsigned long *end) { }
+#endif
 
 static int msm_iommu_tex_class[4];
 
@@ -70,29 +80,14 @@ static void __disable_clocks(struct msm_iommu_drvdata *drvdata)
 	clk_disable(drvdata->pclk);
 }
 
-static int __flush_iotlb(struct iommu_domain *domain)
+static int __flush_iotlb_va(struct iommu_domain *domain, unsigned int va)
 {
 	struct msm_priv *priv = domain->priv;
 	struct msm_iommu_drvdata *iommu_drvdata;
 	struct msm_iommu_ctx_drvdata *ctx_drvdata;
 	int ret = 0;
-#ifndef CONFIG_IOMMU_PGTABLES_L2
-	unsigned long *fl_table = priv->pgtable;
-	int i;
+	int asid;
 
-	if (!list_empty(&priv->list_attached)) {
-		dmac_flush_range(fl_table, fl_table + SZ_16K);
-
-		for (i = 0; i < NUM_FL_PTE; i++)
-			if ((fl_table[i] & 0x03) == FL_TYPE_TABLE) {
-				void *sl_table = __va(fl_table[i] &
-								FL_BASE_MASK);
-				dmac_flush_range(sl_table, sl_table + SZ_4K);
-			}
-	}
-#endif
-
-	mb();
 	list_for_each_entry(ctx_drvdata, &priv->list_attached, attached_elm) {
 		if (!ctx_drvdata->pdev || !ctx_drvdata->pdev->dev.parent)
 			BUG();
@@ -105,7 +100,43 @@ static int __flush_iotlb(struct iommu_domain *domain)
 		if (ret)
 			goto fail;
 
-		SET_CTX_TLBIALL(iommu_drvdata->base, ctx_drvdata->num, 0);
+		asid = GET_CONTEXTIDR_ASID(iommu_drvdata->base,
+					   ctx_drvdata->num);
+
+		SET_TLBIVA(iommu_drvdata->base, ctx_drvdata->num,
+			   asid | (va & TLBIVA_VA));
+		mb();
+		__disable_clocks(iommu_drvdata);
+	}
+fail:
+	return ret;
+}
+
+static int __flush_iotlb(struct iommu_domain *domain)
+{
+	struct msm_priv *priv = domain->priv;
+	struct msm_iommu_drvdata *iommu_drvdata;
+	struct msm_iommu_ctx_drvdata *ctx_drvdata;
+	int ret = 0;
+	int asid;
+
+	list_for_each_entry(ctx_drvdata, &priv->list_attached, attached_elm) {
+		if (!ctx_drvdata->pdev || !ctx_drvdata->pdev->dev.parent)
+			BUG();
+
+		iommu_drvdata = dev_get_drvdata(ctx_drvdata->pdev->dev.parent);
+		if (!iommu_drvdata)
+			BUG();
+
+		ret = __enable_clocks(iommu_drvdata);
+		if (ret)
+			goto fail;
+
+		asid = GET_CONTEXTIDR_ASID(iommu_drvdata->base,
+					   ctx_drvdata->num);
+
+		SET_TLBIASID(iommu_drvdata->base, ctx_drvdata->num, asid);
+		mb();
 		__disable_clocks(iommu_drvdata);
 	}
 fail:
@@ -128,7 +159,6 @@ static void __reset_context(void __iomem *base, int ctx)
 	SET_BFBCR(base, ctx, 0);
 	SET_PAR(base, ctx, 0);
 	SET_FAR(base, ctx, 0);
-	SET_CTX_TLBIALL(base, ctx, 0);
 	SET_TLBFLPTER(base, ctx, 0);
 	SET_TLBSLPTER(base, ctx, 0);
 	SET_TLBLKCR(base, ctx, 0);
@@ -153,9 +183,6 @@ static void __program_context(void __iomem *base, int ctx, int ncb,
 
 	SET_TTBCR(base, ctx, 0);
 	SET_TTBR0_PA(base, ctx, (pgtable >> TTBR0_PA_SHIFT));
-
-	/* Invalidate the TLB for this context */
-	SET_CTX_TLBIALL(base, ctx, 0);
 
 	/* Set interrupt number to "secure" interrupt */
 	SET_IRPTNDX(base, ctx, 0);
@@ -237,7 +264,7 @@ static void __program_context(void __iomem *base, int ctx, int ncb,
 	mb();
 }
 
-static int msm_iommu_domain_init(struct iommu_domain *domain)
+static int msm_iommu_domain_init(struct iommu_domain *domain, int flags)
 {
 	struct msm_priv *priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 
@@ -335,7 +362,6 @@ static int msm_iommu_attach_dev(struct iommu_domain *domain, struct device *dev)
 
 	__disable_clocks(iommu_drvdata);
 	list_add(&(ctx_drvdata->attached_elm), &priv->list_attached);
-	ret = __flush_iotlb(domain);
 
 fail:
 	spin_unlock_irqrestore(&msm_iommu_lock, flags);
@@ -365,13 +391,12 @@ static void msm_iommu_detach_dev(struct iommu_domain *domain,
 	if (!iommu_drvdata || !ctx_drvdata || !ctx_dev)
 		goto fail;
 
-	ret = __flush_iotlb(domain);
-	if (ret)
-		goto fail;
-
 	ret = __enable_clocks(iommu_drvdata);
 	if (ret)
 		goto fail;
+
+	SET_TLBIASID(iommu_drvdata->base, ctx_dev->num,
+		     GET_CONTEXTIDR_ASID(iommu_drvdata->base, ctx_dev->num));
 
 	__reset_context(iommu_drvdata->base, ctx_dev->num);
 	__disable_clocks(iommu_drvdata);
@@ -379,6 +404,32 @@ static void msm_iommu_detach_dev(struct iommu_domain *domain,
 
 fail:
 	spin_unlock_irqrestore(&msm_iommu_lock, flags);
+}
+
+static int __get_pgprot(int prot, int len)
+{
+	unsigned int pgprot;
+	int tex, sh;
+
+	sh = (prot & MSM_IOMMU_ATTR_SH) ? 1 : 0;
+	tex = msm_iommu_tex_class[prot & MSM_IOMMU_CP_MASK];
+
+	if (tex < 0 || tex > NUM_TEX_CLASS - 1)
+		return 0;
+
+	if (len == SZ_16M || len == SZ_1M) {
+		pgprot = sh ? FL_SHARED : 0;
+		pgprot |= tex & 0x01 ? FL_BUFFERABLE : 0;
+		pgprot |= tex & 0x02 ? FL_CACHEABLE : 0;
+		pgprot |= tex & 0x04 ? FL_TEX0 : 0;
+	} else	{
+		pgprot = sh ? SL_SHARED : 0;
+		pgprot |= tex & 0x01 ? SL_BUFFERABLE : 0;
+		pgprot |= tex & 0x02 ? SL_CACHEABLE : 0;
+		pgprot |= tex & 0x04 ? SL_TEX0 : 0;
+	}
+
+	return pgprot;
 }
 
 static int msm_iommu_map(struct iommu_domain *domain, unsigned long va,
@@ -394,17 +445,9 @@ static int msm_iommu_map(struct iommu_domain *domain, unsigned long va,
 	unsigned long sl_offset;
 	unsigned int pgprot;
 	size_t len = 0x1000UL << order;
-	int ret = 0, tex, sh;
+	int ret = 0;
 
 	spin_lock_irqsave(&msm_iommu_lock, flags);
-
-	sh = (prot & MSM_IOMMU_ATTR_SH) ? 1 : 0;
-	tex = msm_iommu_tex_class[prot & MSM_IOMMU_CP_MASK];
-
-	if (tex < 0 || tex > NUM_TEX_CLASS - 1) {
-		ret = -EINVAL;
-		goto fail;
-	}
 
 	priv = domain->priv;
 	if (!priv) {
@@ -427,16 +470,11 @@ static int msm_iommu_map(struct iommu_domain *domain, unsigned long va,
 		goto fail;
 	}
 
-	if (len == SZ_16M || len == SZ_1M) {
-		pgprot = sh ? FL_SHARED : 0;
-		pgprot |= tex & 0x01 ? FL_BUFFERABLE : 0;
-		pgprot |= tex & 0x02 ? FL_CACHEABLE : 0;
-		pgprot |= tex & 0x04 ? FL_TEX0 : 0;
-	} else	{
-		pgprot = sh ? SL_SHARED : 0;
-		pgprot |= tex & 0x01 ? SL_BUFFERABLE : 0;
-		pgprot |= tex & 0x02 ? SL_CACHEABLE : 0;
-		pgprot |= tex & 0x04 ? SL_TEX0 : 0;
+	pgprot = __get_pgprot(prot, len);
+
+	if (!pgprot) {
+		ret = -EINVAL;
+		goto fail;
 	}
 
 	fl_offset = FL_OFFSET(va);	/* Upper 12 bits */
@@ -455,6 +493,8 @@ static int msm_iommu_map(struct iommu_domain *domain, unsigned long va,
 			*(fl_pte+i) = (pa & 0xFF000000) | FL_SUPERSECTION |
 				  FL_AP_READ | FL_AP_WRITE | FL_TYPE_SECT |
 				  FL_SHARED | FL_NG | pgprot;
+
+		clean_pte(fl_pte, fl_pte + 16);
 	}
 
 	if (len == SZ_1M) {
@@ -465,6 +505,8 @@ static int msm_iommu_map(struct iommu_domain *domain, unsigned long va,
 
 		*fl_pte = (pa & 0xFFF00000) | FL_AP_READ | FL_AP_WRITE | FL_NG |
 					    FL_TYPE_SECT | FL_SHARED | pgprot;
+
+		clean_pte(fl_pte, fl_pte + 1);
 	}
 
 	/* Need a 2nd level table */
@@ -484,6 +526,8 @@ static int msm_iommu_map(struct iommu_domain *domain, unsigned long va,
 
 			*fl_pte = ((((int)__pa(sl)) & FL_BASE_MASK) | \
 						      FL_TYPE_TABLE);
+
+			clean_pte(fl_pte, fl_pte + 1);
 		}
 
 		if (!(*fl_pte & FL_TYPE_TABLE)) {
@@ -504,6 +548,7 @@ static int msm_iommu_map(struct iommu_domain *domain, unsigned long va,
 
 		*sl_pte = (pa & SL_BASE_MASK_SMALL) | SL_AP0 | SL_AP1 | SL_NG |
 					  SL_SHARED | SL_TYPE_SMALL | pgprot;
+		clean_pte(sl_pte, sl_pte + 1);
 	}
 
 	if (len == SZ_64K) {
@@ -518,9 +563,11 @@ static int msm_iommu_map(struct iommu_domain *domain, unsigned long va,
 		for (i = 0; i < 16; i++)
 			*(sl_pte+i) = (pa & SL_BASE_MASK_LARGE) | SL_AP0 |
 			    SL_NG | SL_AP1 | SL_SHARED | SL_TYPE_LARGE | pgprot;
+
+		clean_pte(sl_pte, sl_pte + 16);
 	}
 
-	ret = __flush_iotlb(domain);
+	ret = __flush_iotlb_va(domain, va);
 fail:
 	spin_unlock_irqrestore(&msm_iommu_lock, flags);
 	return ret;
@@ -574,12 +621,18 @@ static int msm_iommu_unmap(struct iommu_domain *domain, unsigned long va,
 	}
 
 	/* Unmap supersection */
-	if (len == SZ_16M)
+	if (len == SZ_16M) {
 		for (i = 0; i < 16; i++)
 			*(fl_pte+i) = 0;
 
-	if (len == SZ_1M)
+		clean_pte(fl_pte, fl_pte + 16);
+	}
+
+	if (len == SZ_1M) {
 		*fl_pte = 0;
+
+		clean_pte(fl_pte, fl_pte + 1);
+	}
 
 	sl_table = (unsigned long *) __va(((*fl_pte) & FL_BASE_MASK));
 	sl_offset = SL_OFFSET(va);
@@ -588,10 +641,15 @@ static int msm_iommu_unmap(struct iommu_domain *domain, unsigned long va,
 	if (len == SZ_64K) {
 		for (i = 0; i < 16; i++)
 			*(sl_pte+i) = 0;
+
+		clean_pte(sl_pte, sl_pte + 16);
 	}
 
-	if (len == SZ_4K)
+	if (len == SZ_4K) {
 		*sl_pte = 0;
+
+		clean_pte(sl_pte, sl_pte + 1);
+	}
 
 	if (len == SZ_4K || len == SZ_64K) {
 		int used = 0;
@@ -602,13 +660,179 @@ static int msm_iommu_unmap(struct iommu_domain *domain, unsigned long va,
 		if (!used) {
 			free_page((unsigned long)sl_table);
 			*fl_pte = 0;
+
+			clean_pte(fl_pte, fl_pte + 1);
 		}
 	}
 
-	ret = __flush_iotlb(domain);
+	ret = __flush_iotlb_va(domain, va);
 fail:
 	spin_unlock_irqrestore(&msm_iommu_lock, flags);
 	return ret;
+}
+
+static int msm_iommu_map_range(struct iommu_domain *domain, unsigned int va,
+			       struct scatterlist *sg, unsigned int len,
+			       int prot)
+{
+	unsigned int pa;
+	unsigned int offset = 0;
+	unsigned int pgprot;
+	unsigned long *fl_table;
+	unsigned long *fl_pte;
+	unsigned long fl_offset;
+	unsigned long *sl_table;
+	unsigned long sl_offset, sl_start;
+	unsigned long flags;
+	unsigned int chunk_offset = 0;
+	unsigned int chunk_pa;
+	int ret = 0;
+	struct msm_priv *priv;
+
+	spin_lock_irqsave(&msm_iommu_lock, flags);
+
+	BUG_ON(len & (SZ_4K - 1));
+
+	priv = domain->priv;
+	fl_table = priv->pgtable;
+
+	pgprot = __get_pgprot(prot, SZ_4K);
+
+	if (!pgprot) {
+		ret = -EINVAL;
+		goto fail;
+	}
+
+	fl_offset = FL_OFFSET(va);	/* Upper 12 bits */
+	fl_pte = fl_table + fl_offset;	/* int pointers, 4 bytes */
+
+	sl_table = (unsigned long *) __va(((*fl_pte) & FL_BASE_MASK));
+	sl_offset = SL_OFFSET(va);
+
+	chunk_pa = sg_phys(sg);
+
+	while (offset < len) {
+		/* Set up a 2nd level page table if one doesn't exist */
+		if (*fl_pte == 0) {
+			sl_table = (unsigned long *)
+				 __get_free_pages(GFP_ATOMIC, get_order(SZ_4K));
+
+			if (!sl_table) {
+				pr_debug("Could not allocate second level table\n");
+				ret = -ENOMEM;
+				goto fail;
+			}
+
+			memset(sl_table, 0, SZ_4K);
+			*fl_pte = ((((int)__pa(sl_table)) & FL_BASE_MASK) |
+							    FL_TYPE_TABLE);
+			clean_pte(fl_pte, fl_pte + 1);
+		} else
+			sl_table = (unsigned long *)
+					       __va(((*fl_pte) & FL_BASE_MASK));
+
+		/* Keep track of initial position so we
+		 * don't clean more than we have to
+		 */
+		sl_start = sl_offset;
+
+		/* Build the 2nd level page table */
+		while (offset < len && sl_offset < NUM_SL_PTE) {
+			pa = chunk_pa + chunk_offset;
+			sl_table[sl_offset] = (pa & SL_BASE_MASK_SMALL) |
+					      pgprot | SL_AP0 | SL_AP1 | SL_NG |
+					      SL_SHARED | SL_TYPE_SMALL;
+			sl_offset++;
+			offset += SZ_4K;
+
+			chunk_offset += SZ_4K;
+
+			if (chunk_offset >= sg->length && offset < len) {
+				chunk_offset = 0;
+				sg = sg_next(sg);
+				chunk_pa = sg_phys(sg);
+			}
+		}
+
+		clean_pte(sl_table + sl_start, sl_table + sl_offset);
+
+		fl_pte++;
+		sl_offset = 0;
+	}
+	__flush_iotlb(domain);
+fail:
+	spin_unlock_irqrestore(&msm_iommu_lock, flags);
+	return ret;
+}
+
+
+static int msm_iommu_unmap_range(struct iommu_domain *domain, unsigned int va,
+				 unsigned int len)
+{
+	unsigned int offset = 0;
+	unsigned long *fl_table;
+	unsigned long *fl_pte;
+	unsigned long fl_offset;
+	unsigned long *sl_table;
+	unsigned long sl_start, sl_end;
+	unsigned long flags;
+	int used, i;
+	struct msm_priv *priv;
+
+	spin_lock_irqsave(&msm_iommu_lock, flags);
+
+	BUG_ON(len & (SZ_4K - 1));
+
+	priv = domain->priv;
+	fl_table = priv->pgtable;
+
+	fl_offset = FL_OFFSET(va);	/* Upper 12 bits */
+	fl_pte = fl_table + fl_offset;	/* int pointers, 4 bytes */
+
+	sl_start = SL_OFFSET(va);
+
+	while (offset < len) {
+		sl_table = (unsigned long *) __va(((*fl_pte) & FL_BASE_MASK));
+		sl_end = ((len - offset) / SZ_4K) + sl_start;
+
+		if (sl_end > NUM_SL_PTE)
+			sl_end = NUM_SL_PTE;
+
+		memset(sl_table + sl_start, 0, (sl_end - sl_start) * 4);
+		clean_pte(sl_table + sl_start, sl_table + sl_end);
+
+		offset += (sl_end - sl_start) * SZ_4K;
+
+		/* Unmap and free the 2nd level table if all mappings in it
+		 * were removed. This saves memory, but the table will need
+		 * to be re-allocated the next time someone tries to map these
+		 * VAs.
+		 */
+		used = 0;
+
+		/* If we just unmapped the whole table, don't bother
+		 * seeing if there are still used entries left.
+		 */
+		if (sl_end - sl_start != NUM_SL_PTE)
+			for (i = 0; i < NUM_SL_PTE; i++)
+				if (sl_table[i]) {
+					used = 1;
+					break;
+				}
+		if (!used) {
+			free_page((unsigned long)sl_table);
+			*fl_pte = 0;
+
+			clean_pte(fl_pte, fl_pte + 1);
+		}
+
+		sl_start = 0;
+		fl_pte++;
+	}
+
+	__flush_iotlb(domain);
+	spin_unlock_irqrestore(&msm_iommu_lock, flags);
+	return 0;
 }
 
 static phys_addr_t msm_iommu_iova_to_phys(struct iommu_domain *domain,
@@ -640,9 +864,6 @@ static phys_addr_t msm_iommu_iova_to_phys(struct iommu_domain *domain,
 	if (ret)
 		goto fail;
 
-	/* Invalidate context TLB */
-	SET_CTX_TLBIALL(base, ctx, 0);
-	mb();
 	SET_V2PPR(base, ctx, va & V2Pxx_VA);
 
 	mb();
@@ -742,6 +963,8 @@ static struct iommu_ops msm_iommu_ops = {
 	.detach_dev = msm_iommu_detach_dev,
 	.map = msm_iommu_map,
 	.unmap = msm_iommu_unmap,
+	.map_range = msm_iommu_map_range,
+	.unmap_range = msm_iommu_unmap_range,
 	.iova_to_phys = msm_iommu_iova_to_phys,
 	.domain_has_cap = msm_iommu_domain_has_cap
 };

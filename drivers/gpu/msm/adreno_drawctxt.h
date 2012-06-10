@@ -30,8 +30,7 @@
 #define __ADRENO_DRAWCTXT_H
 
 #include "adreno_pm4types.h"
-#include "a200_reg.h"
-#include "a220_reg.h"
+#include "a2xx_reg.h"
 
 /* Flags */
 
@@ -113,6 +112,9 @@ void adreno_drawctxt_set_bin_base_offset(struct kgsl_device *device,
 
 /* GPU context switch helper functions */
 
+void build_quad_vtxbuff(struct adreno_context *drawctxt,
+		struct gmem_shadow_t *shadow, unsigned int **incmd);
+
 unsigned int uint2float(unsigned int);
 
 static inline unsigned int virt2gpu(unsigned int *cmd,
@@ -126,9 +128,40 @@ static inline void create_ib1(struct adreno_context *drawctxt,
 			      unsigned int *start,
 			      unsigned int *end)
 {
-	cmd[0] = PM4_HDR_INDIRECT_BUFFER_PFD;
+	cmd[0] = CP_HDR_INDIRECT_BUFFER_PFD;
 	cmd[1] = virt2gpu(start, &drawctxt->gpustate);
 	cmd[2] = end - start;
+}
+
+
+static inline unsigned int *reg_range(unsigned int *cmd, unsigned int start,
+	unsigned int end)
+{
+	*cmd++ = CP_REG(start);		/* h/w regs, start addr */
+	*cmd++ = end - start + 1;	/* count */
+	return cmd;
+}
+
+static inline void calc_gmemsize(struct gmem_shadow_t *shadow, int gmem_size)
+{
+	int w = 64, h = 64;
+
+	shadow->format = COLORX_8_8_8_8;
+
+	/* convert from bytes to 32-bit words */
+	gmem_size = (gmem_size + 3) / 4;
+
+	while ((w * h) < gmem_size) {
+		if (w < h)
+			w *= 2;
+		else
+			h *= 2;
+	}
+
+	shadow->pitch = shadow->width = w;
+	shadow->height = h;
+	shadow->gmem_pitch = shadow->pitch;
+	shadow->size = shadow->pitch * shadow->height * 4;
 }
 
 #endif  /* __ADRENO_DRAWCTXT_H */
