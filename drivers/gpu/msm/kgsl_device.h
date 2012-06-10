@@ -1,29 +1,14 @@
 /* Copyright (c) 2002,2007-2011, Code Aurora Forum. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- *       copyright notice, this list of conditions and the following
- *       disclaimer in the documentation and/or other materials provided
- *       with the distribution.
- *     * Neither the name of Code Aurora Forum, Inc. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
  *
- * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
- * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
- * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
- * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
  */
 #ifndef __KGSL_DEVICE_H
@@ -100,7 +85,7 @@ struct kgsl_functable {
 		unsigned int flags);
 	int (*setup_pt)(struct kgsl_device *device,
 		struct kgsl_pagetable *pagetable);
-	int (*cleanup_pt)(struct kgsl_device *device,
+	void (*cleanup_pt)(struct kgsl_device *device,
 		struct kgsl_pagetable *pagetable);
 	void (*power_stats)(struct kgsl_device *device,
 		struct kgsl_power_stats *stats);
@@ -125,6 +110,24 @@ struct kgsl_memregion {
 	unsigned int sizebytes;
 };
 
+/* MH register values */
+struct kgsl_mh {
+	unsigned int     mharb;
+	unsigned int     mh_intf_cfg1;
+	unsigned int     mh_intf_cfg2;
+	uint32_t         mpu_base;
+	int              mpu_range;
+};
+
+struct kgsl_event {
+	uint32_t timestamp;
+	void (*func)(struct kgsl_device *, void *, u32);
+	void *priv;
+	struct list_head list;
+	struct kgsl_device_private *owner;
+};
+
+
 struct kgsl_device {
 	struct device *dev;
 	const char *name;
@@ -136,6 +139,7 @@ struct kgsl_device {
 	struct kgsl_memdesc memstore;
 	const char *iomemname;
 
+	struct kgsl_mh mh;
 	struct kgsl_mmu mmu;
 	struct completion hwaccess_gate;
 	const struct kgsl_functable *ftbl;
@@ -170,7 +174,8 @@ struct kgsl_device {
 	struct wake_lock idle_wakelock;
 	struct kgsl_pwrscale pwrscale;
 	struct kobject pwrscale_kobj;
-	struct pm_qos_request_list pm_qos_req_dma;
+	struct work_struct ts_expired_ws;
+	struct list_head events;
 };
 
 struct kgsl_context {
@@ -233,7 +238,7 @@ static inline int kgsl_idle(struct kgsl_device *device, unsigned int timeout)
 }
 
 static inline int kgsl_create_device_sysfs_files(struct device *root,
-	const struct device_attribute **list)
+	struct device_attribute **list)
 {
 	int ret = 0, i;
 	for (i = 0; list[i] != NULL; i++)
@@ -242,7 +247,7 @@ static inline int kgsl_create_device_sysfs_files(struct device *root,
 }
 
 static inline void kgsl_remove_device_sysfs_files(struct device *root,
-	const struct device_attribute **list)
+	struct device_attribute **list)
 {
 	int i;
 	for (i = 0; list[i] != NULL; i++)

@@ -20,7 +20,7 @@
 #include "adreno_postmortem.h"
 #include "adreno.h"
 
-#include "a200_reg.h"
+#include "a2xx_reg.h"
 
 unsigned int kgsl_cff_dump_enable;
 int kgsl_pm_regs_enabled;
@@ -107,7 +107,7 @@ static int kgsl_hex_dump(const char *prefix, int c, uint8_t *data,
 	ss = snprintf(linebuf, sizeof(linebuf), prefix, c);
 	hex_dump_to_buffer(data, linec, rowc, 4, linebuf+ss,
 		sizeof(linebuf)-ss, 0);
-	strncat(linebuf, "\n", sizeof(linebuf));
+	strlcat(linebuf, "\n", sizeof(linebuf));
 	linebuf[sizeof(linebuf)-1] = 0;
 	ss = strlen(linebuf);
 	if (copy_to_user(buff, linebuf, ss+1))
@@ -396,8 +396,8 @@ static void kgsl_mh_reg_read_fill(struct kgsl_device *device, int i,
 	int j;
 
 	for (j = 0; j < linec; ++j) {
-		kgsl_regwrite(device, REG_MH_DEBUG_CTRL, i+j);
-		kgsl_regread(device, REG_MH_DEBUG_DATA, vals+j);
+		kgsl_regwrite(device, MH_DEBUG_CTRL, i+j);
+		kgsl_regread(device, MH_DEBUG_DATA, vals+j);
 	}
 }
 
@@ -421,6 +421,8 @@ static const struct file_operations kgsl_mh_debug_fops = {
 
 void adreno_debugfs_init(struct kgsl_device *device)
 {
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+
 	if (!device->d_debugfs || IS_ERR(device->d_debugfs))
 		return;
 
@@ -436,6 +438,8 @@ void adreno_debugfs_init(struct kgsl_device *device)
 			    &kgsl_mh_debug_fops);
 	debugfs_create_file("cff_dump", 0644, device->d_debugfs, device,
 			    &kgsl_cff_dump_enable_fops);
+	debugfs_create_u32("wait_timeout", 0644, device->d_debugfs,
+		&adreno_dev->wait_timeout);
 
 	/* Create post mortem control files */
 

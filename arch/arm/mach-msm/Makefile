@@ -7,7 +7,7 @@ obj-$(CONFIG_KEXEC) += msm_kexec.o
 
 obj-$(CONFIG_MSM_PROC_COMM) += proc_comm.o
 ifndef CONFIG_ARCH_MSM8X60
-	obj-$(CONFIG_MSM_PROC_COMM) += clock-pcom.o
+	obj-$(CONFIG_MSM_PROC_COMM) += clock-pcom.o internal_power_rail.o
 	obj-$(CONFIG_MSM_PROC_COMM) += vreg.o mpp.o
 	ifdef CONFIG_MSM_PROC_COMM
 ifndef CONFIG_ARCH_FSM9XXX
@@ -113,7 +113,6 @@ obj-$(CONFIG_MSM_RPCSERVER_HANDSET) += rpc_server_handset.o
 obj-$(CONFIG_MSM_QDSP6) += qdsp6/
 obj-$(CONFIG_MSM8X60_AUDIO) += qdsp6v2/
 obj-$(CONFIG_MSM_AUDIO_QDSP6) += qdsp6v2/
-obj-$(CONFIG_MSM_HW3D) += hw3d.o
 ifdef CONFIG_PM
 	obj-$(CONFIG_ARCH_MSM8960) += pm-8x60.o
 	obj-$(CONFIG_ARCH_MSM8X60) += pm-8x60.o
