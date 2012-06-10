@@ -148,6 +148,7 @@ static struct z180_device device_2d0 = {
 			.config = Z180_MMU_CONFIG,
 		},
 		.pwrctrl = {
+			.pwr_rail = PWR_RAIL_GRP_2D_CLK,
 			.regulator_name = "fs_gfx2d0",
 			.irq_name = KGSL_2D0_IRQ,
 		},
@@ -156,13 +157,6 @@ static struct z180_device device_2d0 = {
 		.active_cnt = 0,
 		.iomemname = KGSL_2D0_REG_MEMORY,
 		.ftbl = &z180_functable,
-#ifdef CONFIG_HAS_EARLYSUSPEND
-		.display_off = {
-			.level = EARLY_SUSPEND_LEVEL_STOP_DRAWING,
-			.suspend = kgsl_early_suspend_driver,
-			.resume = kgsl_late_resume_driver,
-		},
-#endif
 	},
 };
 
@@ -186,6 +180,7 @@ static struct z180_device device_2d1 = {
 			.config = Z180_MMU_CONFIG,
 		},
 		.pwrctrl = {
+			.pwr_rail = PWR_RAIL_GRP_2D_CLK,
 			.regulator_name = "fs_gfx2d1",
 			.irq_name = KGSL_2D1_IRQ,
 		},
@@ -194,13 +189,6 @@ static struct z180_device device_2d1 = {
 		.active_cnt = 0,
 		.iomemname = KGSL_2D1_REG_MEMORY,
 		.ftbl = &z180_functable,
-		.display_off = {
-#ifdef CONFIG_HAS_EARLYSUSPEND
-			.level = EARLY_SUSPEND_LEVEL_STOP_DRAWING,
-			.suspend = kgsl_early_suspend_driver,
-			.resume = kgsl_late_resume_driver,
-#endif
-		},
 	},
 };
 
@@ -234,6 +222,7 @@ static irqreturn_t z180_isr(int irq, void *data)
 			count &= 255;
 			z180_dev->timestamp += count;
 
+			queue_work(device->work_queue, &device->ts_expired_ws);
 			wake_up_interruptible(&device->wait_queue);
 
 			atomic_notifier_call_chain(
@@ -410,7 +399,7 @@ z180_cmdstream_issueibcmds(struct kgsl_device_private *dev_priv,
 	unsigned int sizedwords;
 
 	if (device->state & KGSL_STATE_HUNG) {
-		return -EINVAL;
+		result = -EINVAL;
 		goto error;
 	}
 	if (numibs != 1) {
@@ -564,7 +553,7 @@ static int z180_start(struct kgsl_device *device, unsigned int init_ram)
 	z180_cmdstream_start(device);
 
 	mod_timer(&device->idle_timer, jiffies + FIRST_TIMEOUT);
-	kgsl_pwrctrl_irq(device, KGSL_PWRFLAGS_IRQ_ON);
+	kgsl_pwrctrl_irq(device, KGSL_PWRFLAGS_ON);
 	return 0;
 
 error_clk_off:

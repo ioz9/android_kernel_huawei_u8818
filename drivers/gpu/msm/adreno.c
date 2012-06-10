@@ -16,8 +16,6 @@
 #include <linux/ioctl.h>
 #include <linux/sched.h>
 
-#include <mach/socinfo.h>
-
 #include "kgsl.h"
 #include "kgsl_pwrscale.h"
 #include "kgsl_cffdump.h"
@@ -30,6 +28,13 @@
 
 #include "a2xx_reg.h"
 #include "kgsl_mmu.h"
+
+#define cpu_is_msm7x01()        0
+#define cpu_is_msm7x30()        1
+#define cpu_is_qsd8x50()        0
+#define cpu_is_msm8x60()        0
+#define cpu_is_msm8960()        0
+#define cpu_is_msm8930()        0
 
 #define DRIVER_VERSION_MAJOR   3
 #define DRIVER_VERSION_MINOR   1
@@ -91,9 +96,10 @@ static struct adreno_device device_3d0 = {
 			.config = ADRENO_MMU_CONFIG,
 		},
 		.pwrctrl = {
+			.pwr_rail = PWR_RAIL_GRP_CLK,
 			.regulator_name = "fs_gfx3d",
 			.irq_name = KGSL_3D0_IRQ,
-			.src_clk_name = "src_clk",
+			.src_clk_name = "grp_src_clk",
 		},
 		.mutex = __MUTEX_INITIALIZER(device_3d0.dev.mutex),
 		.state = KGSL_STATE_INIT,
@@ -359,7 +365,7 @@ adreno_getchipid(struct kgsl_device *device)
 	* adreno 22x gpus are indicated by coreid 2,
 	* but REG_RBBM_PERIPHID1 always contains 0 for this field
 	*/
-	if (cpu_is_msm8960() || cpu_is_msm8x60())
+	if (cpu_is_msm8960() || cpu_is_msm8x60() || cpu_is_msm8930())
 		chipid = 2 << 24;
 	else
 		chipid = (coreid & 0xF) << 24;
@@ -536,7 +542,7 @@ static int adreno_start(struct kgsl_device *device, unsigned int init_ram)
 	adreno_regwrite(device, REG_SQ_VS_PROGRAM, 0x00000000);
 	adreno_regwrite(device, REG_SQ_PS_PROGRAM, 0x00000000);
 
-	if (cpu_is_msm8960())
+	if (cpu_is_msm8960() || cpu_is_msm8930())
 		adreno_regwrite(device, REG_RBBM_PM_OVERRIDE1, 0x200);
 	else
 		adreno_regwrite(device, REG_RBBM_PM_OVERRIDE1, 0);
@@ -1275,7 +1281,7 @@ static struct platform_driver adreno_platform_driver = {
 	.driver = {
 		.owner = THIS_MODULE,
 		.name = DEVICE_3D_NAME,
-		.pm = &kgsl_pm_ops,
+//		.pm = &kgsl_pm_ops,
 	}
 };
 
