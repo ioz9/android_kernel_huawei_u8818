@@ -136,6 +136,8 @@ int32_t pmem_kfree(const int32_t physaddr);
 struct android_pmem_platform_data
 {
 	const char* name;
+	/* starting physical address of memory region */
+	unsigned long start;
 	/* size of memory region */
 	unsigned long size;
 
@@ -153,6 +155,8 @@ struct android_pmem_platform_data
 	/* The MSM7k has bits to enable a write buffer in the bus controller*/
 	unsigned buffered;
 	/* which memory type (i.e. SMI, EBI1) this PMEM device is backed by */
+		/* This PMEM is on memory that may be powered off */
+	unsigned unstable;
 	unsigned memory_type;
 	/*
 	 * function to be called when the number of allocations goes from
