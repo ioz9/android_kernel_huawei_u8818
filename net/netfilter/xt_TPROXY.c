@@ -160,17 +160,17 @@ tproxy_tg4(struct sk_buff *skb, __be32 laddr, __be16 lport,
 		   targets on the same rule yet */
 		skb->mark = (skb->mark & ~mark_mask) ^ mark_value;
 
-		pr_debug("redirecting: proto %hhu %pI4:%hu -> %pI4:%hu, mark: %x\n",
-			 iph->protocol, &iph->daddr, ntohs(hp->dest),
-			 &laddr, ntohs(lport), skb->mark);
+		pr_debug("redirecting: proto %hhu %pI6:%hu -> %pI6:%hu, mark: %x\n",
+				tproto, &iph->saddr, ntohs(hp->dest),
+				&tgi->laddr.in6, ntohs(tgi->lport), skb->mark);
 
 		nf_tproxy_assign_sock(skb, sk);
 		return NF_ACCEPT;
 	}
 
 	pr_debug("no socket, dropping: proto %hhu %pI4:%hu -> %pI4:%hu, mark: %x\n",
-		 iph->protocol, &iph->saddr, ntohs(hp->source),
-		 &iph->daddr, ntohs(hp->dest), skb->mark);
+			iph->protocol, &iph->saddr, ntohs(hp->source),
+			&iph->daddr, ntohs(hp->dest), skb->mark);
 	return NF_DROP;
 }
 
@@ -328,16 +328,16 @@ tproxy_tg6_v1(struct sk_buff *skb, const struct xt_action_param *par)
 		skb->mark = (skb->mark & ~tgi->mark_mask) ^ tgi->mark_value;
 
 		pr_debug("redirecting: proto %hhu %pI6:%hu -> %pI6:%hu, mark: %x\n",
-			 tproto, &iph->saddr, ntohs(hp->source),
-			 laddr, ntohs(lport), skb->mark);
+				tproto, &iph->saddr, ntohs(hp->source),
+				laddr, ntohs(lport), skb->mark);
 
 		nf_tproxy_assign_sock(skb, sk);
 		return NF_ACCEPT;
 	}
 
 	pr_debug("no socket, dropping: proto %hhu %pI6:%hu -> %pI6:%hu, mark: %x\n",
-		 tproto, &iph->saddr, ntohs(hp->source),
-		 &iph->daddr, ntohs(hp->dest), skb->mark);
+			tproto, &iph->saddr, ntohs(hp->source),
+			&iph->daddr, ntohs(hp->dest), skb->mark);
 
 	return NF_DROP;
 }
@@ -347,11 +347,11 @@ static int tproxy_tg6_check(const struct xt_tgchk_param *par)
 	const struct ip6t_ip6 *i = par->entryinfo;
 
 	if ((i->proto == IPPROTO_TCP || i->proto == IPPROTO_UDP)
-	    && !(i->flags & IP6T_INV_PROTO))
+			&& !(i->flags & IP6T_INV_PROTO))
 		return 0;
 
 	pr_info("Can be used only in combination with "
-		"either -p tcp or -p udp\n");
+			"either -p tcp or -p udp\n");
 	return -EINVAL;
 }
 #endif
@@ -405,7 +405,6 @@ static struct xt_target tproxy_tg_reg[] __read_mostly = {
 		.me		= THIS_MODULE,
 	},
 #endif
-
 };
 
 static int __init tproxy_tg_init(void)

@@ -193,7 +193,7 @@ static int nf_ct_frag6_queue(struct nf_ct_frag6_queue *fq, struct sk_buff *skb,
 	int offset, end;
 
 	if (fq->q.last_in & INET_FRAG_COMPLETE) {
-		pr_debug("Already completed\n");
+		pr_debug("Allready completed\n");
 		goto err;
 	}
 

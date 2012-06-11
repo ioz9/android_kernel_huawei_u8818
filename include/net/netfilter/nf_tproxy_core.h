@@ -9,6 +9,11 @@
 #include <net/inet6_hashtables.h>
 #include <net/tcp.h>
 
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#include <net/ipv6.h>
+#include <net/inet6_hashtables.h>
+#endif
+
 #define NFT_LOOKUP_ANY         0
 #define NFT_LOOKUP_LISTENER    1
 #define NFT_LOOKUP_ESTABLISHED 2
